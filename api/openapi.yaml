@@ -1,0 +1,663 @@
+openapi: 3.1.0
+info:
+  title: vmapi
+  version: v1
+  summary: A thin per-VM layer over libvirt.
+  description: |
+    Creates, lists, starts, stops and deletes VMs on one libvirt host, and
+    takes and restores their snapshots. Every VM has an owner, the user that
+    created it; a user sees and operates only the VMs it owns, and an admin
+    sees and operates them all (docs/adr/0002). Only VMs created by vmapi
+    exist as far as this API is concerned (docs/adr/0003).
+
+    The API is published behind devbox proxy, which authenticates the caller
+    and passes its name in `X-Devbox-User`. A caller presents a proxy bearer
+    token (`Authorization: Bearer ...`) or a browser session; vmapi itself
+    only reads the header the proxy sets.
+
+    Compatibility rules (docs/adr/0007):
+
+    - Responses gain fields over time. Ignore the ones you do not know.
+    - String values documented as a list of "known values" (VM states, error
+      codes) gain values over time. Treat an unknown one as "other".
+    - Requests with fields the server does not know are rejected with
+      `invalid_argument`.
+    - Every error has the shape of `Error`. Branch on `error.code`, not on
+      `error.message`.
+  license:
+    name: MIT
+    identifier: MIT
+
+servers:
+  - url: https://vm.poissonnerie.dev
+
+security:
+  - devboxProxy: []
+
+tags:
+  - name: whoami
+    description: The caller, as vmapi sees it.
+  - name: images
+    description: The OS images VMs are created from.
+  - name: vms
+    description: VMs, each owned by the user that created it.
+  - name: snapshots
+    description: Snapshots of a VM, taken and restored in place.
+
+paths:
+  /api/v1/whoami:
+    get:
+      tags: [whoami]
+      operationId: getWhoami
+      summary: Who the caller is, as vmapi sees it.
+      responses:
+        "200":
+          description: The caller.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Whoami"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /api/v1/images:
+    get:
+      tags: [images]
+      operationId: listImages
+      summary: The OS images a VM can be created from.
+      description: |
+        The images come from the server's configuration (docs/adr/0004).
+        A caller chooses one by name and cannot supply an image of its own.
+      responses:
+        "200":
+          description: The images.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageList"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /api/v1/vms:
+    get:
+      tags: [vms]
+      operationId: listVMs
+      summary: List VMs.
+      description: |
+        A user gets the VMs it owns. An admin gets every VM, or those of one
+        owner when `owner` is given. A user other than an admin that asks for
+        an owner other than itself gets `permission_denied`.
+      parameters:
+        - name: owner
+          in: query
+          required: false
+          description: Only the VMs of this owner.
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: The VMs, ordered by name.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VMList"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/PermissionDenied"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [vms]
+      operationId: createVM
+      summary: Create and start a VM.
+      description: |
+        Synchronous: the response is sent once the domain is defined and
+        started, and carries the IP the VM was given. Whether the guest is
+        ready (cloud-init finished, ssh accepting) is for the caller to find
+        out. The first VM created from an image also waits for the image to
+        be downloaded, which can take minutes.
+
+        The caller becomes the owner. `already_exists` is returned when any
+        domain on the host has the name, whoever owns it (docs/adr/0003).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVMRequest"
+      responses:
+        "201":
+          description: The VM, running.
+          headers:
+            Location:
+              description: The path of the VM.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VM"
+        "400":
+          $ref: "#/components/responses/InvalidArgument"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          description: The image is not in the server's list (`not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: |
+            The name is taken (`already_exists`), the requested IP is used by
+            another VM (`ip_in_use`), or no IP is left in the range
+            (`ip_exhausted`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /api/v1/vms/{name}:
+    parameters:
+      - $ref: "#/components/parameters/VMName"
+    get:
+      tags: [vms]
+      operationId: getVM
+      summary: Get a VM.
+      responses:
+        "200":
+          description: The VM.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VM"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [vms]
+      operationId: deleteVM
+      summary: Delete a VM.
+      description: |
+        A running VM is forced off first. The domain, its snapshots, its disk
+        and its seed ISO are all removed, and its IP returns to the range.
+      responses:
+        "204":
+          description: Deleted.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /api/v1/vms/{name}/start:
+    parameters:
+      - $ref: "#/components/parameters/VMName"
+    post:
+      tags: [vms]
+      operationId: startVM
+      summary: Start a VM.
+      description: Succeeds as well when the VM is already running.
+      responses:
+        "200":
+          description: The VM.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VM"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /api/v1/vms/{name}/stop:
+    parameters:
+      - $ref: "#/components/parameters/VMName"
+    post:
+      tags: [vms]
+      operationId: stopVM
+      summary: Stop a VM.
+      description: |
+        Without `force`, the guest is sent an ACPI shutdown and the response
+        does not wait for it: `202`, and the VM's `state` is whatever it is at
+        that moment. Poll `getVM` until it is `shut_off`, and use `force` if
+        the guest does not stop in the time you allow. With `force`, the VM is
+        turned off at once: `200`, `shut_off`. Both succeed when the VM is
+        already off.
+
+        The body may be omitted, which is the same as `{"force": false}`.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StopVMRequest"
+      responses:
+        "200":
+          description: Forced off, or already off.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VM"
+        "202":
+          description: The guest was asked to shut down.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VM"
+        "400":
+          $ref: "#/components/responses/InvalidArgument"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /api/v1/vms/{name}/snapshots:
+    parameters:
+      - $ref: "#/components/parameters/VMName"
+    get:
+      tags: [snapshots]
+      operationId: listSnapshots
+      summary: List the snapshots of a VM.
+      responses:
+        "200":
+          description: The snapshots, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotList"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [snapshots]
+      operationId: createSnapshot
+      summary: Take a snapshot of a VM.
+      description: |
+        Of a running VM, the snapshot holds memory as well as disk, and the VM
+        is paused while it is taken. Of a VM that is off, it holds the disk
+        only (docs/adr/0006).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSnapshotRequest"
+      responses:
+        "201":
+          description: The snapshot.
+          headers:
+            Location:
+              description: The path of the snapshot.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
+        "400":
+          $ref: "#/components/responses/InvalidArgument"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The VM already has a snapshot of that name (`already_exists`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /api/v1/vms/{name}/snapshots/{snapshot}:
+    parameters:
+      - $ref: "#/components/parameters/VMName"
+      - $ref: "#/components/parameters/SnapshotName"
+    delete:
+      tags: [snapshots]
+      operationId: deleteSnapshot
+      summary: Delete a snapshot.
+      responses:
+        "204":
+          description: Deleted.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /api/v1/vms/{name}/snapshots/{snapshot}/revert:
+    parameters:
+      - $ref: "#/components/parameters/VMName"
+      - $ref: "#/components/parameters/SnapshotName"
+    post:
+      tags: [snapshots]
+      operationId: revertSnapshot
+      summary: Restore a VM to a snapshot.
+      description: |
+        The VM returns to the state the snapshot was taken in: running if it
+        was running, off if it was off. What was written since is lost.
+      responses:
+        "200":
+          description: The VM after the revert.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VM"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          $ref: "#/components/responses/Error"
+
+components:
+  securitySchemes:
+    devboxProxy:
+      type: http
+      scheme: bearer
+      description: |
+        A token from `devbox-proxy token --service vm --user <name>`, or a
+        browser session with the proxy. The proxy verifies it and passes
+        `<name>` to vmapi in `X-Devbox-User`; that name is the owner of what
+        the caller creates.
+
+  parameters:
+    VMName:
+      name: name
+      in: path
+      required: true
+      description: The VM's name.
+      schema:
+        $ref: "#/components/schemas/Name"
+    SnapshotName:
+      name: snapshot
+      in: path
+      required: true
+      description: The snapshot's name.
+      schema:
+        $ref: "#/components/schemas/Name"
+
+  responses:
+    Error:
+      description: Any error. See `ErrorCode` for what each code means.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    InvalidArgument:
+      description: The request is malformed or a value is out of bounds (`invalid_argument`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthenticated:
+      description: The request did not come through the proxy with a user (`unauthenticated`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PermissionDenied:
+      description: A user other than an admin asked for another owner's VMs (`permission_denied`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: |
+        The VM or snapshot does not exist, or belongs to someone else
+        (`not_found`). The two are not told apart.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unavailable:
+      description: |
+        libvirt cannot be reached, or the image could not be downloaded or did
+        not match its checksum (`unavailable`). Retrying later may succeed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Name:
+      type: string
+      description: |
+        A DNS label: a lowercase letter first, then lowercase letters, digits
+        and hyphens, not ending in a hyphen, 63 characters at most. A VM's
+        name is unique on the host and is also its libvirt domain name and its
+        hostname.
+      pattern: "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+      examples: [k8s-test-cp1]
+
+    Whoami:
+      type: object
+      required: [user, admin]
+      properties:
+        user:
+          type: string
+          description: The name in `X-Devbox-User`; the owner of what this caller creates.
+          examples: [penelope]
+        admin:
+          type: boolean
+          description: Whether the caller sees and operates every VM.
+
+    Image:
+      type: object
+      required: [name]
+      properties:
+        name:
+          $ref: "#/components/schemas/Name"
+        description:
+          type: string
+          examples: [Ubuntu 24.04 LTS]
+
+    ImageList:
+      type: object
+      required: [images]
+      properties:
+        images:
+          type: array
+          items:
+            $ref: "#/components/schemas/Image"
+
+    VMState:
+      type: string
+      description: |
+        The domain's state. Known values, more may be added:
+
+        - `running`
+        - `paused`
+        - `shutting_down`: asked to shut down, not off yet
+        - `shut_off`
+        - `crashed`
+        - `suspended`: suspended by the guest (power management)
+        - `unknown`
+      examples: [running]
+
+    VM:
+      type: object
+      required: [name, owner, image, vcpus, memory_mib, disk_gib, ip, state, created_at]
+      properties:
+        name:
+          $ref: "#/components/schemas/Name"
+        owner:
+          type: string
+          description: The user that created the VM.
+          examples: [penelope]
+        image:
+          $ref: "#/components/schemas/Name"
+        vcpus:
+          type: integer
+          minimum: 1
+        memory_mib:
+          type: integer
+          minimum: 256
+        disk_gib:
+          type: integer
+          minimum: 1
+        ip:
+          type: string
+          format: ipv4
+          description: The address the VM was given. It stays the VM's until the VM is deleted.
+          examples: [192.168.40.10]
+        state:
+          $ref: "#/components/schemas/VMState"
+        created_at:
+          type: string
+          format: date-time
+
+    VMList:
+      type: object
+      required: [vms]
+      properties:
+        vms:
+          type: array
+          items:
+            $ref: "#/components/schemas/VM"
+
+    CreateVMRequest:
+      type: object
+      additionalProperties: false
+      required: [name, image]
+      properties:
+        name:
+          $ref: "#/components/schemas/Name"
+        image:
+          description: The name of an image from `listImages`.
+          $ref: "#/components/schemas/Name"
+        vcpus:
+          type: integer
+          minimum: 1
+          default: 2
+        memory_mib:
+          type: integer
+          minimum: 256
+          default: 2048
+        disk_gib:
+          type: integer
+          minimum: 1
+          default: 20
+          description: |
+            The size of the VM's disk. Rejected with `invalid_argument` when
+            smaller than the image's own size.
+        ip:
+          type: string
+          format: ipv4
+          description: |
+            The address to give the VM. It has to be inside the server's range
+            (`invalid_argument` otherwise) and unused (`ip_in_use` otherwise).
+            Omit it to be given the lowest free address.
+        user_data:
+          type: string
+          description: |
+            The cloud-init user-data, put into the seed as it is and not
+            checked (docs/adr/0005): usually a `#cloud-config` document, but
+            anything cloud-init accepts will do. Omitted, the VM gets an empty
+            `#cloud-config`. The network configuration and the hostname are
+            the server's to write; the request body is limited to 1 MiB.
+          examples:
+            - |
+              #cloud-config
+              users:
+                - name: ubuntu
+                  ssh_authorized_keys:
+                    - ssh-ed25519 AAAA... someone@example
+                  sudo: ALL=(ALL) NOPASSWD:ALL
+
+    StopVMRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        force:
+          type: boolean
+          default: false
+          description: Turn the VM off at once instead of asking the guest to shut down.
+
+    Snapshot:
+      type: object
+      required: [name, vm_state, created_at]
+      properties:
+        name:
+          $ref: "#/components/schemas/Name"
+        vm_state:
+          description: The VM's state when the snapshot was taken; reverting returns it there.
+          $ref: "#/components/schemas/VMState"
+        created_at:
+          type: string
+          format: date-time
+
+    SnapshotList:
+      type: object
+      required: [snapshots]
+      properties:
+        snapshots:
+          type: array
+          items:
+            $ref: "#/components/schemas/Snapshot"
+
+    CreateSnapshotRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          $ref: "#/components/schemas/Name"
+
+    ErrorCode:
+      type: string
+      description: |
+        Known values, more may be added. An unknown code is to be handled by
+        its HTTP status.
+
+        | code | status | meaning |
+        |---|---|---|
+        | `invalid_argument` | 400 | The request is malformed or a value is out of bounds |
+        | `unauthenticated` | 401 | No `X-Devbox-User`: the request did not come through the proxy |
+        | `permission_denied` | 403 | A user other than an admin asked for another owner's VMs |
+        | `not_found` | 404 | No such VM, snapshot or image, or not the caller's |
+        | `already_exists` | 409 | A VM or snapshot of that name exists |
+        | `ip_in_use` | 409 | The requested IP is another VM's |
+        | `ip_exhausted` | 409 | No IP is left in the range |
+        | `unavailable` | 503 | libvirt or the image download failed; may succeed later |
+        | `internal` | 500 | Anything else |
+      examples: [not_found]
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              $ref: "#/components/schemas/ErrorCode"
+            message:
+              type: string
+              description: For people. Do not parse it.
+              examples: ["vm \"k8s-test-cp1\" not found"]
