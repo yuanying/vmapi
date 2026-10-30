@@ -27,22 +27,22 @@
 {{if .Caller.User}}
 <table>
   <thead>
-    <tr><th>名前</th>{{if .Caller.Admin}}<th>持ち主</th>{{end}}<th>IP</th><th>状態</th><th>イメージ</th><th>CPU / メモリ / ディスク</th><th></th></tr>
+    <tr><th>名前</th><th>持ち主</th><th>IP</th><th>状態</th><th>イメージ</th><th>CPU / メモリ / ディスク</th><th></th></tr>
   </thead>
   <tbody>
   {{range .VMs}}
     <tr>
       <td><code>{{.Name}}</code></td>
-      {{if $.Caller.Admin}}<td>{{.Owner}}</td>{{end}}
+      <td>{{.Owner}}</td>
       <td><code>{{.IP}}</code></td>
       <td class="state-{{.State}}">{{.State}}</td>
       <td>{{.Image}}</td>
       <td>{{.VCPUs}} / {{.MemoryMiB}} MiB / {{.DiskGiB}} GiB</td>
-      <td class="actions">
+      <td class="actions">{{if $.Caller.Operates .}}
         <form method="post" action="/ui/vms/{{.Name}}/start"><button>起動</button></form>
         <form method="post" action="/ui/vms/{{.Name}}/stop"><button>停止</button></form>
         <form method="post" action="/ui/vms/{{.Name}}/delete" onsubmit="return confirm('{{.Name}} を削除します。ディスクとスナップショットも消えます。')"><button>削除</button></form>
-      </td>
+      {{end}}</td>
     </tr>
   {{else}}
     <tr><td colspan="7" class="empty">VM はありません。作成は vmctl か API で行います。</td></tr>

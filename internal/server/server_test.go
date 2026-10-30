@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -163,10 +164,13 @@ func TestListVMsByOwner(t *testing.T) {
 	e.createVM(t, "pi", "x1")
 
 	got := decode[api.VMList](t, e.do(t, "penelope", "GET", "/api/v1/vms", ""))
-	if len(got.VMs) != 1 || got.VMs[0].Name != "p1" {
+	if len(got.VMs) != 2 {
 		t.Errorf("penelope's list = %+v", got)
 	}
-	wantError(t, e.do(t, "penelope", "GET", "/api/v1/vms?owner=pi", ""), http.StatusForbidden, api.CodePermissionDenied)
+	got = decode[api.VMList](t, e.do(t, "penelope", "GET", "/api/v1/vms?owner=pi", ""))
+	if len(got.VMs) != 1 || got.VMs[0].Name != "x1" || got.VMs[0].Owner != "pi" {
+		t.Errorf("penelope's list of pi = %+v", got)
+	}
 
 	got = decode[api.VMList](t, e.do(t, "admin", "GET", "/api/v1/vms", ""))
 	if len(got.VMs) != 2 {
@@ -178,27 +182,39 @@ func TestListVMsByOwner(t *testing.T) {
 	}
 
 	// An empty list is an empty array, not null.
-	if rec := e.do(t, "nobody", "GET", "/api/v1/vms", ""); strings.TrimSpace(rec.Body.String()) != `{"vms":[]}` {
+	if rec := e.do(t, "nobody", "GET", "/api/v1/vms?owner=nobody", ""); strings.TrimSpace(rec.Body.String()) != `{"vms":[]}` {
 		t.Errorf("empty list = %s", rec.Body.String())
 	}
 }
 
-func TestOthersVMsAreNotFound(t *testing.T) {
+func TestOthersSeeAVMButCannotOperateIt(t *testing.T) {
 	e := newEnv(t)
 	e.createVM(t, "penelope", "p1")
+	if rec := e.do(t, "penelope", "POST", "/api/v1/vms/p1/snapshots", `{"name":"s"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("snapshot: %d %s", rec.Code, rec.Body.String())
+	}
+	before := e.Hypervisor.Calls()
+
+	if v := decode[api.VM](t, e.do(t, "pi", "GET", "/api/v1/vms/p1", "")); v.Owner != "penelope" {
+		t.Errorf("pi getting p1: %+v", v)
+	}
+	if got := decode[api.SnapshotList](t, e.do(t, "pi", "GET", "/api/v1/vms/p1/snapshots", "")); len(got.Snapshots) != 1 {
+		t.Errorf("pi listing p1's snapshots: %+v", got)
+	}
 	for _, r := range []struct{ method, path, body string }{
-		{"GET", "/api/v1/vms/p1", ""},
 		{"DELETE", "/api/v1/vms/p1", ""},
 		{"POST", "/api/v1/vms/p1/start", ""},
-		{"POST", "/api/v1/vms/p1/stop", ""},
-		{"GET", "/api/v1/vms/p1/snapshots", ""},
-		{"POST", "/api/v1/vms/p1/snapshots", `{"name":"s"}`},
+		{"POST", "/api/v1/vms/p1/stop", `{"force":true}`},
+		{"POST", "/api/v1/vms/p1/snapshots", `{"name":"t"}`},
 		{"DELETE", "/api/v1/vms/p1/snapshots/s", ""},
 		{"POST", "/api/v1/vms/p1/snapshots/s/revert", ""},
 	} {
 		t.Run(r.method+" "+r.path, func(t *testing.T) {
-			wantError(t, e.do(t, "pi", r.method, r.path, r.body), http.StatusNotFound, api.CodeNotFound)
+			wantError(t, e.do(t, "pi", r.method, r.path, r.body), http.StatusForbidden, api.CodePermissionDenied)
 		})
+	}
+	if calls := e.Hypervisor.Calls(); !slices.Equal(calls, before) {
+		t.Errorf("libvirt was changed: %q", calls[len(before):])
 	}
 }
 
@@ -328,7 +344,7 @@ func TestSameOriginAndNonBrowserPostsPass(t *testing.T) {
 
 // --- The page ---
 
-func TestThePageListsTheCallersVMs(t *testing.T) {
+func TestThePageListsEveryVM(t *testing.T) {
 	e := newEnv(t)
 	e.createVM(t, "pi", "mine")
 	e.createVM(t, "penelope", "hers")
@@ -339,19 +355,20 @@ func TestThePageListsTheCallersVMs(t *testing.T) {
 		t.Fatalf("page: %d %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"mine", "192.168.40.10", "running", `action="/ui/vms/mine/start"`, `action="/ui/vms/mine/stop"`, `action="/ui/vms/mine/delete"`} {
+	for _, want := range []string{"mine", "hers", "penelope", "192.168.40.10", "192.168.40.11", "running", `action="/ui/vms/mine/start"`, `action="/ui/vms/mine/stop"`, `action="/ui/vms/mine/delete"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("page lacks %q", want)
 		}
 	}
-	for _, unwanted := range []string{"hers", "legacy"} {
+	// The buttons are only on the VMs the caller may operate.
+	for _, unwanted := range []string{"legacy", "/ui/vms/hers/"} {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("page shows %q", unwanted)
 		}
 	}
 
 	body = e.do(t, "admin", "GET", "/", "").Body.String()
-	for _, want := range []string{"mine", "hers", "penelope"} {
+	for _, want := range []string{"mine", "hers", "penelope", `action="/ui/vms/hers/delete"`, `action="/ui/vms/mine/delete"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("admin's page lacks %q", want)
 		}
@@ -361,7 +378,7 @@ func TestThePageListsTheCallersVMs(t *testing.T) {
 func TestThePageEscapesTheOwner(t *testing.T) {
 	e := newEnv(t)
 	e.createVM(t, "<script>x</script>", "a")
-	body := e.do(t, "admin", "GET", "/", "").Body.String()
+	body := e.do(t, "pi", "GET", "/", "").Body.String()
 	if strings.Contains(body, "<script>x</script>") {
 		t.Error("the owner is not escaped")
 	}
@@ -378,9 +395,9 @@ func TestThePageButtons(t *testing.T) {
 	if v := decode[api.VM](t, e.do(t, "pi", "GET", "/api/v1/vms/a", "")); v.State != api.StateShuttingDown {
 		t.Errorf("after stop: %s", v.State)
 	}
-	// Another owner's VM: not found, shown as a page.
+	// Another owner's VM: refused, shown as a page.
 	rec := e.do(t, "penelope", "POST", "/ui/vms/a/delete", "", same)
-	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "not found") {
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "only its owner") {
 		t.Errorf("penelope deleting a: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := e.do(t, "pi", "POST", "/ui/vms/a/delete", "", same); rec.Code != http.StatusSeeOther {

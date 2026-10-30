@@ -22,7 +22,7 @@ vmapi の設定は YAML のファイル一つで与える。置き場は `~/.con
 | `network.prefix` | 整数 | 必須 | VM に設定するプレフィックス長 |
 | `network.gateway` | IPv4 | 必須 | VM に設定する gateway |
 | `network.dns` | IPv4 の配列 | 必須 | VM に設定する DNS サーバー。一つ以上 |
-| `admins` | 文字列の配列 | 空 | すべての VM を扱える利用者（`X-Devbox-User` の値）。空なら管理者はいない |
+| `admins` | 文字列の配列 | 空 | 他人の VM も操作できる利用者（`X-Devbox-User` の値）。見ることは誰でもできる。空なら管理者はいない |
 | `images` | 配列 | 必須 | 選べる OS イメージ。一つ以上。各要素は下の表 |
 
 `images` の各要素:

@@ -33,7 +33,7 @@ Usage:
 Commands:
   whoami                              who vmapi takes you for
   images                              the images a VM can be created from
-  list [--owner NAME]                 your VMs (an admin's: everyone's)
+  list [--owner NAME]                 every VM, or one owner's
   get NAME                            one VM
   create NAME --image IMAGE [--vcpus N] [--memory-mib N] [--disk-gib N]
          [--ip IP] [--user-data FILE|-]

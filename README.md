@@ -1,7 +1,7 @@
 # vmapi
 
 libvirt の上に置く、VM 単位の薄い HTTP API。VM の作成・一覧・起動・停止・削除と
-スナップショットを、持ち主ごとに分けて扱う。
+スナップショットを扱う。VM は誰からも見え、操作できるのは持ち主と管理者だけである。
 
 - `vmapi` — API サーバー。devbox の apps のコンテナで動き、devbox proxy の後ろに置く
 - `vmctl` — 人間のシェルとスクリプト向けの CLI
@@ -28,9 +28,11 @@ vmapi --config ~/.config/vmapi/config.yaml
 
 vmapi は `X-Devbox-User` の名前を利用者とし、それが無いリクエストを `unauthenticated`（401）で拒む。このヘッダは proxy が付ける。vmapi のポートはホストに公開せず、proxy からだけ届くように置く（ADR 0002・0008）。
 
+利用者は誰でも、すべての VM とそのスナップショットを見られる。起動・停止・削除と、スナップショットの作成・削除・復元は、VM の持ち主と設定の `admins` に挙げた管理者だけができる。それ以外の利用者の操作は `permission_denied`（403）で拒み、libvirt には何も送らない（ADR 0002）。
+
 ### 画面
 
-`/` は、利用者の VM（管理者にはすべての VM）を、持ち主・IP・状態とともに並べる。各行に起動・停止・削除のボタンがある。停止はゲストにシャットダウンを頼むだけで、止まるのを待たない。作成は画面ではなく API・`vmctl`・codemode で行う。
+`/` は、すべての VM を、持ち主・IP・状態とともに並べる。利用者が操作できる VM（自分の VM。管理者にはすべての VM）の行にだけ、起動・停止・削除のボタンがある。停止はゲストにシャットダウンを頼むだけで、止まるのを待たない。作成は画面ではなく API・`vmctl`・codemode で行う。
 
 ブラウザは proxy の cookie で認証されるので、よそのサイトのページからでも cookie 付きの `POST` を送れてしまう。vmapi は、ブラウザがよそのオリジンから送ったと示すリクエスト（`Sec-Fetch-Site` が `same-origin`・`none` 以外、または `Origin` のホストが `Host` と違うもの）のうち `GET`・`HEAD`・`OPTIONS` 以外を、画面と API の区別なく `permission_denied`（403）で拒む。どちらのヘッダも付けない `vmctl` や `curl` は影響を受けない（ADR 0010）。
 
@@ -62,8 +64,8 @@ vmctl images                       # 選べるイメージ
 vmctl create k8s-cp1 --image noble --vcpus 4 --memory-mib 8192 --disk-gib 40 \
   --user-data cloud-config.yaml    # 作成して起動。払い出した IP が表示される
 vmctl create k8s-w1 --image noble --ip 192.168.40.21 --user-data - < cloud-config.yaml
-vmctl list                         # 自分の VM。管理者は全員の VM
-vmctl list --owner penelope        # 持ち主で絞り込む（管理者だけ）
+vmctl list                         # すべての VM。OWNER の列に持ち主が出る
+vmctl list --owner penelope        # 持ち主で絞り込む
 vmctl get k8s-cp1
 vmctl stop k8s-cp1                 # ゲストにシャットダウンを頼む（待たない）
 vmctl stop --force k8s-cp1         # すぐに止める

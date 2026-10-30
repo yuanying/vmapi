@@ -6,9 +6,9 @@ info:
   description: |
     Creates, lists, starts, stops and deletes VMs on one libvirt host, and
     takes and restores their snapshots. Every VM has an owner, the user that
-    created it; a user sees and operates only the VMs it owns, and an admin
-    sees and operates them all (docs/adr/0002). Only VMs created by vmapi
-    exist as far as this API is concerned (docs/adr/0003).
+    created it. Every user sees every VM and its snapshots; only its owner
+    and an admin operate it (docs/adr/0002). Only VMs created by vmapi exist
+    as far as this API is concerned (docs/adr/0003).
 
     The API is published behind devbox proxy, which authenticates the caller
     and passes its name in `X-Devbox-User`. A caller presents a proxy bearer
@@ -88,9 +88,8 @@ paths:
       operationId: listVMs
       summary: List VMs.
       description: |
-        A user gets the VMs it owns. An admin gets every VM, or those of one
-        owner when `owner` is given. A user other than an admin that asks for
-        an owner other than itself gets `permission_denied`.
+        Every user gets every VM, or those of one owner when `owner` is
+        given. An owner that has no VM gets an empty list.
       parameters:
         - name: owner
           in: query
@@ -108,8 +107,6 @@ paths:
                 $ref: "#/components/schemas/VMList"
         "401":
           $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/PermissionDenied"
         default:
           $ref: "#/components/responses/Error"
     post:
@@ -199,6 +196,8 @@ paths:
           description: Deleted.
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/PermissionDenied"
         "404":
           $ref: "#/components/responses/NotFound"
         default:
@@ -221,6 +220,8 @@ paths:
                 $ref: "#/components/schemas/VM"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/PermissionDenied"
         "404":
           $ref: "#/components/responses/NotFound"
         default:
@@ -265,6 +266,8 @@ paths:
           $ref: "#/components/responses/InvalidArgument"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/PermissionDenied"
         "404":
           $ref: "#/components/responses/NotFound"
         default:
@@ -320,6 +323,8 @@ paths:
           $ref: "#/components/responses/InvalidArgument"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/PermissionDenied"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -344,6 +349,8 @@ paths:
           description: Deleted.
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/PermissionDenied"
         "404":
           $ref: "#/components/responses/NotFound"
         default:
@@ -369,6 +376,8 @@ paths:
                 $ref: "#/components/schemas/VM"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/PermissionDenied"
         "404":
           $ref: "#/components/responses/NotFound"
         default:
@@ -421,15 +430,16 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
     PermissionDenied:
-      description: A user other than an admin asked for another owner's VMs (`permission_denied`).
+      description: |
+        The caller is neither the VM's owner nor an admin, and only they may
+        operate it (`permission_denied`). Nothing was changed.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
     NotFound:
       description: |
-        The VM or snapshot does not exist, or belongs to someone else
-        (`not_found`). The two are not told apart.
+        The VM or snapshot does not exist (`not_found`).
       content:
         application/json:
           schema:
@@ -464,7 +474,7 @@ components:
           examples: [penelope]
         admin:
           type: boolean
-          description: Whether the caller sees and operates every VM.
+          description: Whether the caller operates every VM, not only its own.
 
     Image:
       type: object
@@ -638,8 +648,8 @@ components:
         |---|---|---|
         | `invalid_argument` | 400 | The request is malformed or a value is out of bounds |
         | `unauthenticated` | 401 | No `X-Devbox-User`: the request did not come through the proxy |
-        | `permission_denied` | 403 | A user other than an admin asked for another owner's VMs, or a browser sent a write from another origin (docs/adr/0010) |
-        | `not_found` | 404 | No such VM, snapshot or image, or not the caller's |
+        | `permission_denied` | 403 | The caller is neither the owner of the VM it operates nor an admin, or a browser sent a write from another origin (docs/adr/0010) |
+        | `not_found` | 404 | No such VM, snapshot or image |
         | `already_exists` | 409 | A VM or snapshot of that name exists |
         | `ip_in_use` | 409 | The requested IP is another VM's |
         | `ip_exhausted` | 409 | No IP is left in the range |
