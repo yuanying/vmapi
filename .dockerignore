@@ -1,0 +1,8 @@
+# What the build does not need: history, local build output, and the files
+# that describe the repository rather than make up the server.
+.git
+.github
+bin
+dist
+docs
+*.md
