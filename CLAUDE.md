@@ -19,7 +19,7 @@ libvirt の上に置く、VM 単位の薄い HTTP API（サーバー `vmapi`）�
 ## テストの層
 
 - `make test` は Go のツールチェーンだけで通す。libvirt・root・ネットワークに触れない
-- libvirt は `digitalocean/go-libvirt` の上にインターフェイスを置き、テストでは偽物に差し替える。持ち主による絞り込み、metadata の無い VM を見せないこと、IP の払い出し（衝突の拒否、同時の作成）はこの層で確かめる
+- libvirt は `digitalocean/go-libvirt` の上にインターフェイスを置き、テストでは偽物に差し替える。持ち主と管理者だけが操作できること、metadata の無い VM を見せないこと、IP の払い出し（衝突の拒否、同時の作成）はこの層で確かめる
 - `qemu-img`・`xorriso` などの外部のコマンドもインターフェイスの後ろに置き、テストでは渡す引数とファイルの中身を確かめる
 - 実機の libvirt が要るテストを足すときは build tag で分け、`make test` からは呼ばない
 
