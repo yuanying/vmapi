@@ -13,3 +13,4 @@ vmapi の設計の決定。実装はここに書かれた決定に従う。覆�
 | [0007](0007-http-api-contract.md) | API の契約は `api/openapi.yaml`。JSON、追加で壊れない形、エラーの形は一つ |
 | [0008](0008-run-in-a-devbox-apps-container.md) | devbox の apps のコンテナで動かす。libvirt のソケットを持つコンテナはホストの root 相当 |
 | [0009](0009-configuration-file.md) | 設定は `~/.config/vmapi/config.yaml`。リポジトリにも dotfiles にも置かない |
+| [0010](0010-refuse-cross-origin-browser-requests.md) | ブラウザがよそのオリジンから送った `POST` などは画面・API ともに `403`。`Sec-Fetch-Site` と `Origin` で判定する |
