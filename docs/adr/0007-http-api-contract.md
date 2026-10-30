@@ -36,8 +36,8 @@ codemode のスクリプトは応答を JSON として受け取り、フィー�
 |---|---|---|
 | `invalid_argument` | 400 | リクエストの形や値が誤っている |
 | `unauthenticated` | 401 | `X-Devbox-User` が無い（[[0002]]） |
-| `permission_denied` | 403 | 管理者でない利用者が他人の持ち主で絞り込んだ |
-| `not_found` | 404 | VM・スナップショット・イメージが無い、または自分のものでない |
+| `permission_denied` | 403 | 持ち主でも管理者でもない利用者が VM を操作しようとした（[[0002]] の改訂） |
+| `not_found` | 404 | VM・スナップショット・イメージが無い |
 | `already_exists` | 409 | 同じ名前の VM・スナップショットがある |
 | `ip_in_use` | 409 | 指定した IP を他の VM が使っている |
 | `ip_exhausted` | 409 | 払い出せる IP が残っていない |
