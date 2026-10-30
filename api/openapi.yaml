@@ -638,7 +638,7 @@ components:
         |---|---|---|
         | `invalid_argument` | 400 | The request is malformed or a value is out of bounds |
         | `unauthenticated` | 401 | No `X-Devbox-User`: the request did not come through the proxy |
-        | `permission_denied` | 403 | A user other than an admin asked for another owner's VMs |
+        | `permission_denied` | 403 | A user other than an admin asked for another owner's VMs, or a browser sent a write from another origin (docs/adr/0010) |
         | `not_found` | 404 | No such VM, snapshot or image, or not the caller's |
         | `already_exists` | 409 | A VM or snapshot of that name exists |
         | `ip_in_use` | 409 | The requested IP is another VM's |

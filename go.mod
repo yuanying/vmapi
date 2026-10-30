@@ -2,9 +2,16 @@ module github.com/yuanying/vmapi
 
 go 1.27.0
 
+toolchain go1.27.3
+
 tool (
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	golang.org/x/vuln/cmd/govulncheck
+)
+
+require (
+	github.com/digitalocean/go-libvirt v0.0.0-20261013170128-efbbdf578ac8
+	go.yaml.in/yaml/v3 v3.0.5
 )
 
 require (
@@ -205,7 +212,7 @@ require (
 	go.augendre.info/fatcontext v0.10.1 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
-	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20260811152304-ee035b5b010f // indirect
 	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
