@@ -27,6 +27,12 @@ type Caller struct {
 	Admin bool
 }
 
+// Operates tells whether the caller may change the VM: its owner and
+// admins may. Everyone may see it (docs/adr/0002).
+func (c Caller) Operates(v api.VM) bool {
+	return c.Admin || v.Owner == c.User
+}
+
 // Images hands out the path of a kept image, downloading it first if needed.
 type Images interface {
 	Ensure(ctx context.Context, img config.Image) (string, error)
@@ -118,10 +124,6 @@ func readDomain(d Domain) (managed, error) {
 	return managed{domain: d, parsed: p, meta: p.Metadata.VM}, nil
 }
 
-func visible(c Caller, meta *metadata) bool {
-	return meta != nil && (c.Admin || meta.Owner == c.User)
-}
-
 func notFound(name string) error {
 	return api.Errorf(api.CodeNotFound, "vm %q not found", name)
 }
@@ -145,9 +147,9 @@ func checkName(kind, name string) error {
 	return nil
 }
 
-// find returns the caller's VM of the name. Domains without metadata and
-// other owners' VMs are not found, for admins too in the first case.
-func (s *Service) find(c Caller, name string) (managed, error) {
+// find returns the VM of the name. Domains without metadata are not found,
+// for admins too.
+func (s *Service) find(name string) (managed, error) {
 	if err := checkName("vm", name); err != nil {
 		return managed{}, err
 	}
@@ -162,15 +164,27 @@ func (s *Service) find(c Caller, name string) (managed, error) {
 	if err != nil {
 		return managed{}, libvirtError(err)
 	}
-	if !visible(c, m.meta) {
+	if m.meta == nil {
 		return managed{}, notFound(name)
 	}
 	return m, nil
 }
 
+// operated returns the VM of the name if the caller may change it.
+func (s *Service) operated(c Caller, name string) (managed, error) {
+	m, err := s.find(name)
+	if err != nil {
+		return managed{}, err
+	}
+	if !c.Operates(m.vm()) {
+		return managed{}, api.Errorf(api.CodePermissionDenied, "vm %q is %q's: only its owner or an admin can operate it", name, m.meta.Owner)
+	}
+	return m, nil
+}
+
 // get reads the VM again after an operation changed it.
-func (s *Service) get(c Caller, name string) (api.VM, error) {
-	m, err := s.find(c, name)
+func (s *Service) get(name string) (api.VM, error) {
+	m, err := s.find(name)
 	if err != nil {
 		return api.VM{}, err
 	}
@@ -194,19 +208,15 @@ func (s *Service) all() ([]managed, error) {
 	return out, nil
 }
 
-// List returns the VMs the caller may see, by name. owner narrows them to
-// one owner; only an admin may name an owner other than itself.
-func (s *Service) List(_ context.Context, c Caller, owner string) ([]api.VM, error) {
-	if owner != "" && owner != c.User && !c.Admin {
-		return nil, api.Errorf(api.CodePermissionDenied, "only an admin can list the VMs of %q", owner)
-	}
+// List returns every VM, by name. owner narrows them to one owner.
+func (s *Service) List(_ context.Context, _ Caller, owner string) ([]api.VM, error) {
 	all, err := s.all()
 	if err != nil {
 		return nil, err
 	}
 	out := []api.VM{}
 	for _, m := range all {
-		if !visible(c, m.meta) || (owner != "" && m.meta.Owner != owner) {
+		if m.meta == nil || (owner != "" && m.meta.Owner != owner) {
 			continue
 		}
 		out = append(out, m.vm())
@@ -215,9 +225,9 @@ func (s *Service) List(_ context.Context, c Caller, owner string) ([]api.VM, err
 	return out, nil
 }
 
-// Get returns one of the caller's VMs.
-func (s *Service) Get(_ context.Context, c Caller, name string) (api.VM, error) {
-	return s.get(c, name)
+// Get returns one VM.
+func (s *Service) Get(_ context.Context, _ Caller, name string) (api.VM, error) {
+	return s.get(name)
 }
 
 // createSpec is a validated createVM request.
@@ -311,7 +321,7 @@ func (s *Service) Create(ctx context.Context, c Caller, req api.CreateVMRequest)
 	if err := s.Hypervisor.StartDomain(spec.name); err != nil {
 		return api.VM{}, errors.Join(libvirtError(err), s.remove(spec.name))
 	}
-	return s.get(c, spec.name)
+	return s.get(spec.name)
 }
 
 func (s *Service) define(ctx context.Context, c Caller, spec createSpec, backing, backingFormat string) (err error) {
@@ -429,7 +439,7 @@ func newMAC(taken map[string]bool) string {
 
 // Start starts the VM. A running VM is left as it is.
 func (s *Service) Start(_ context.Context, c Caller, name string) (api.VM, error) {
-	m, err := s.find(c, name)
+	m, err := s.operated(c, name)
 	if err != nil {
 		return api.VM{}, err
 	}
@@ -438,14 +448,14 @@ func (s *Service) Start(_ context.Context, c Caller, name string) (api.VM, error
 			return api.VM{}, libvirtError(err)
 		}
 	}
-	return s.get(c, name)
+	return s.get(name)
 }
 
 // Stop turns the VM off at once with force, and otherwise asks the guest to
 // shut down without waiting. accepted tells the second case, in which the
 // VM may not be off yet. A VM that is off is left as it is.
 func (s *Service) Stop(_ context.Context, c Caller, name string, force bool) (v api.VM, accepted bool, err error) {
-	m, err := s.find(c, name)
+	m, err := s.operated(c, name)
 	if err != nil {
 		return api.VM{}, false, err
 	}
@@ -460,14 +470,14 @@ func (s *Service) Stop(_ context.Context, c Caller, name string, force bool) (v 
 	if err != nil {
 		return api.VM{}, false, libvirtError(err)
 	}
-	v, err = s.get(c, name)
+	v, err = s.get(name)
 	return v, !force, err
 }
 
 // Delete turns the VM off if it runs, undefines it with its snapshots and
 // removes its files.
 func (s *Service) Delete(_ context.Context, c Caller, name string) error {
-	m, err := s.find(c, name)
+	m, err := s.operated(c, name)
 	if err != nil {
 		return err
 	}
@@ -518,8 +528,8 @@ func (s *Service) snapshots(name string) ([]api.Snapshot, error) {
 }
 
 // Snapshots lists the VM's snapshots, oldest first.
-func (s *Service) Snapshots(_ context.Context, c Caller, name string) ([]api.Snapshot, error) {
-	if _, err := s.find(c, name); err != nil {
+func (s *Service) Snapshots(_ context.Context, _ Caller, name string) ([]api.Snapshot, error) {
+	if _, err := s.find(name); err != nil {
 		return nil, err
 	}
 	return s.snapshots(name)
@@ -531,7 +541,7 @@ func snapshotNotFound(name, snap string) error {
 
 // CreateSnapshot takes an internal snapshot of the VM.
 func (s *Service) CreateSnapshot(_ context.Context, c Caller, name, snap string) (api.Snapshot, error) {
-	m, err := s.find(c, name)
+	m, err := s.operated(c, name)
 	if err != nil {
 		return api.Snapshot{}, err
 	}
@@ -562,7 +572,7 @@ func (s *Service) CreateSnapshot(_ context.Context, c Caller, name, snap string)
 
 // DeleteSnapshot deletes one of the VM's snapshots.
 func (s *Service) DeleteSnapshot(_ context.Context, c Caller, name, snap string) error {
-	if _, err := s.find(c, name); err != nil {
+	if _, err := s.operated(c, name); err != nil {
 		return err
 	}
 	if err := checkName("snapshot", snap); err != nil {
@@ -580,7 +590,7 @@ func (s *Service) DeleteSnapshot(_ context.Context, c Caller, name, snap string)
 
 // RevertSnapshot returns the VM to the snapshot, running or off as it was.
 func (s *Service) RevertSnapshot(_ context.Context, c Caller, name, snap string) (api.VM, error) {
-	if _, err := s.find(c, name); err != nil {
+	if _, err := s.operated(c, name); err != nil {
 		return api.VM{}, err
 	}
 	if err := checkName("snapshot", snap); err != nil {
@@ -593,5 +603,5 @@ func (s *Service) RevertSnapshot(_ context.Context, c Caller, name, snap string)
 	if err != nil {
 		return api.VM{}, libvirtError(err)
 	}
-	return s.get(c, name)
+	return s.get(name)
 }

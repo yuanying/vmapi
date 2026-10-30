@@ -190,11 +190,22 @@ func TestTheVMLifecycle(t *testing.T) {
 	}
 }
 
-func TestListByOwner(t *testing.T) {
-	setup(t)
-	r := vmctl(t, "", "list", "--owner", "penelope")
+func TestOthersVMs(t *testing.T) {
+	_, e := setup(t)
+	if _, err := e.Service.Create(t.Context(), vm.Caller{User: "penelope"}, api.CreateVMRequest{Name: "p1", Image: "noble"}); err != nil {
+		t.Fatal(err)
+	}
+	r := ok(t, vmctl(t, "", "list", "--owner", "penelope"))
+	if !strings.Contains(r.stdout, "OWNER") || !strings.Contains(r.stdout, "p1") || !strings.Contains(r.stdout, "penelope") {
+		t.Errorf("list --owner: %s", r.stdout)
+	}
+	r = ok(t, vmctl(t, "", "list", "--owner", "pi"))
+	if strings.Contains(r.stdout, "p1") {
+		t.Errorf("list --owner pi: %s", r.stdout)
+	}
+	r = vmctl(t, "", "delete", "p1")
 	if r.code != 1 || !strings.Contains(r.stderr, "permission_denied") {
-		t.Errorf("list --owner: %+v", r)
+		t.Errorf("delete p1: %+v", r)
 	}
 }
 

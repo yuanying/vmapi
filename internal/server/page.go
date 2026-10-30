@@ -33,7 +33,7 @@ func (s *Server) renderPage(w http.ResponseWriter, status int, data pageData) {
 	_, _ = buf.WriteTo(w)
 }
 
-// page lists the caller's VMs, every VM for an admin.
+// page lists every VM, with buttons on those the caller may operate.
 func (s *Server) page(w http.ResponseWriter, r *http.Request, c vm.Caller) {
 	vms, err := s.Service.List(r.Context(), c, "")
 	if err != nil {

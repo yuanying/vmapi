@@ -308,28 +308,45 @@ func TestConcurrentCreationsOfOneNameMakeOneVM(t *testing.T) {
 
 // --- Owners ---
 
-func TestUsersSeeOnlyTheirOwnVMs(t *testing.T) {
+func TestEveryoneSeesEveryVM(t *testing.T) {
 	e := vmtest.New(t, vmtest.Config(t))
 	create(t, e.Service, penelope, "p1")
 	create(t, e.Service, penelope, "p2")
 	create(t, e.Service, pi, "x1")
 
-	got, err := e.Service.List(ctx, penelope, "")
-	if err != nil {
-		t.Fatal(err)
+	for _, c := range []vm.Caller{penelope, pi, {User: "nobody"}} {
+		got, err := e.Service.List(ctx, c, "")
+		if err != nil || !slices.Equal(names(got), []string{"p1", "p2", "x1"}) {
+			t.Errorf("%s sees %q, %v", c.User, names(got), err)
+		}
 	}
-	if !slices.Equal(names(got), []string{"p1", "p2"}) {
-		t.Errorf("penelope sees %q", names(got))
-	}
-	got, err = e.Service.List(ctx, penelope, "penelope")
+	got, err := e.Service.List(ctx, penelope, "penelope")
 	if err != nil || !slices.Equal(names(got), []string{"p1", "p2"}) {
 		t.Errorf("penelope filtering on herself sees %q, %v", names(got), err)
 	}
-	_, err = e.Service.List(ctx, penelope, "pi")
-	wantCode(t, err, api.CodePermissionDenied)
+	got, err = e.Service.List(ctx, penelope, "pi")
+	if err != nil || !slices.Equal(names(got), []string{"x1"}) {
+		t.Errorf("penelope filtering on pi sees %q, %v", names(got), err)
+	}
+	got, err = e.Service.List(ctx, penelope, "nobody")
+	if err != nil || len(got) != 0 {
+		t.Errorf("penelope filtering on nobody sees %q, %v", names(got), err)
+	}
+
+	v, err := e.Service.Get(ctx, pi, "p1")
+	if err != nil || v.Owner != "penelope" {
+		t.Errorf("pi getting p1: %+v, %v", v, err)
+	}
+	if _, err := e.Service.CreateSnapshot(ctx, penelope, "p1", "s1"); err != nil {
+		t.Fatal(err)
+	}
+	snaps, err := e.Service.Snapshots(ctx, pi, "p1")
+	if err != nil || len(snaps) != 1 || snaps[0].Name != "s1" {
+		t.Errorf("pi listing p1's snapshots: %+v, %v", snaps, err)
+	}
 }
 
-func TestAnAdminSeesEveryVM(t *testing.T) {
+func TestAnAdminSeesAndOperatesEveryVM(t *testing.T) {
 	e := vmtest.New(t, vmtest.Config(t))
 	create(t, e.Service, penelope, "p1")
 	create(t, e.Service, pi, "x1")
@@ -343,24 +360,32 @@ func TestAnAdminSeesEveryVM(t *testing.T) {
 	if err != nil || !slices.Equal(names(got), []string{"x1"}) {
 		t.Errorf("admin filtering on pi sees %q, %v", names(got), err)
 	}
-	got, err = e.Service.List(ctx, admin, "nobody")
-	if err != nil || len(got) != 0 {
-		t.Errorf("admin filtering on nobody sees %q, %v", names(got), err)
-	}
 	// An admin's VM is the admin's.
 	if v, _ := e.Service.Get(ctx, admin, "a1"); v.Owner != "admin" {
 		t.Errorf("owner = %q", v.Owner)
 	}
 	// And an admin operates others' VMs.
+	if _, err := e.Service.CreateSnapshot(ctx, admin, "p1", "s1"); err != nil {
+		t.Errorf("admin CreateSnapshot: %v", err)
+	}
+	if _, err := e.Service.RevertSnapshot(ctx, admin, "p1", "s1"); err != nil {
+		t.Errorf("admin RevertSnapshot: %v", err)
+	}
+	if err := e.Service.DeleteSnapshot(ctx, admin, "p1", "s1"); err != nil {
+		t.Errorf("admin DeleteSnapshot: %v", err)
+	}
 	if _, _, err := e.Service.Stop(ctx, admin, "p1", true); err != nil {
 		t.Errorf("admin Stop: %v", err)
+	}
+	if _, err := e.Service.Start(ctx, admin, "p1"); err != nil {
+		t.Errorf("admin Start: %v", err)
 	}
 	if err := e.Service.Delete(ctx, admin, "x1"); err != nil {
 		t.Errorf("admin Delete: %v", err)
 	}
 }
 
-func TestAnotherOwnersVMDoesNotExist(t *testing.T) {
+func TestOnlyTheOwnerOperatesAVM(t *testing.T) {
 	e := vmtest.New(t, vmtest.Config(t))
 	create(t, e.Service, penelope, "p1")
 	if _, err := e.Service.CreateSnapshot(ctx, penelope, "p1", "s1"); err != nil {
@@ -368,10 +393,9 @@ func TestAnotherOwnersVMDoesNotExist(t *testing.T) {
 	}
 	before := e.Hypervisor.Calls()
 
-	ops := operations("p1", "s1")
-	for _, op := range ops {
+	for _, op := range changes("p1", "s1") {
 		t.Run(op.name, func(t *testing.T) {
-			wantCode(t, op.do(e.Service, pi), api.CodeNotFound)
+			wantCode(t, op.do(e.Service, pi), api.CodePermissionDenied)
 		})
 	}
 	if calls := e.Hypervisor.Calls(); !slices.Equal(calls, before) {
@@ -379,21 +403,26 @@ func TestAnotherOwnersVMDoesNotExist(t *testing.T) {
 	}
 }
 
-// operations are every call that names a VM.
-func operations(name, snap string) []struct {
+type operation struct {
 	name string
 	do   func(*vm.Service, vm.Caller) error
-} {
-	return []struct {
-		name string
-		do   func(*vm.Service, vm.Caller) error
-	}{
+}
+
+// reads are every call that names a VM and changes nothing.
+func reads(name string) []operation {
+	return []operation{
 		{"get", func(s *vm.Service, c vm.Caller) error { _, err := s.Get(ctx, c, name); return err }},
+		{"list snapshots", func(s *vm.Service, c vm.Caller) error { _, err := s.Snapshots(ctx, c, name); return err }},
+	}
+}
+
+// changes are every call that names a VM and changes it.
+func changes(name, snap string) []operation {
+	return []operation{
 		{"start", func(s *vm.Service, c vm.Caller) error { _, err := s.Start(ctx, c, name); return err }},
 		{"stop", func(s *vm.Service, c vm.Caller) error { _, _, err := s.Stop(ctx, c, name, false); return err }},
 		{"force stop", func(s *vm.Service, c vm.Caller) error { _, _, err := s.Stop(ctx, c, name, true); return err }},
 		{"delete", func(s *vm.Service, c vm.Caller) error { return s.Delete(ctx, c, name) }},
-		{"list snapshots", func(s *vm.Service, c vm.Caller) error { _, err := s.Snapshots(ctx, c, name); return err }},
 		{"create snapshot", func(s *vm.Service, c vm.Caller) error { _, err := s.CreateSnapshot(ctx, c, name, "new"); return err }},
 		{"delete snapshot", func(s *vm.Service, c vm.Caller) error { return s.DeleteSnapshot(ctx, c, name, snap) }},
 		{"revert snapshot", func(s *vm.Service, c vm.Caller) error { _, err := s.RevertSnapshot(ctx, c, name, snap); return err }},
@@ -417,9 +446,11 @@ func TestDomainsWithoutMetadataAreNotThere(t *testing.T) {
 		}
 	}
 	before := e.Hypervisor.Calls()
-	for _, op := range operations("legacy", "s1") {
+	for _, op := range append(reads("legacy"), changes("legacy", "s1")...) {
 		t.Run(op.name, func(t *testing.T) {
-			wantCode(t, op.do(e.Service, admin), api.CodeNotFound)
+			for _, c := range []vm.Caller{penelope, admin} {
+				wantCode(t, op.do(e.Service, c), api.CodeNotFound)
+			}
 		})
 	}
 	if calls := e.Hypervisor.Calls(); !slices.Equal(calls, before) {
@@ -429,7 +460,7 @@ func TestDomainsWithoutMetadataAreNotThere(t *testing.T) {
 
 func TestANameThatCannotExistIsInvalid(t *testing.T) {
 	e := vmtest.New(t, vmtest.Config(t))
-	for _, op := range operations("Bad_Name", "s1") {
+	for _, op := range append(reads("Bad_Name"), changes("Bad_Name", "s1")...) {
 		t.Run(op.name, func(t *testing.T) {
 			wantCode(t, op.do(e.Service, admin), api.CodeInvalidArgument)
 		})
