@@ -1,9 +1,9 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "The shared presets of yuanying/renovate-config hold the two-day wait, the ubuntu exception, the github-actions group, and the merge of patch, digest and pinning updates once the pull request's checks pass. CI runs on every pull request, with no paths filter, so every branch Renovate opens is tested before it is merged. What is merged this way reaches a release on its own through the weekly release. gomodTidy runs go mod tidy after every Go update, because CI's tidy job fails on a go.mod that is not tidy",
+  "description": "The shared presets of yuanying/renovate-config hold the two-day wait, the ubuntu exception and the github-actions group. platform-automerge turns on GitHub's auto-merge for every update when its pull request is opened, and the ruleset on main holds it back until a code owner in .github/CODEOWNERS approves it and CI passes; GitHub then merges it without waiting for Renovate's next run. CI runs on every pull request, with no paths filter, so every branch Renovate opens is tested before it is merged. What is merged this way reaches a release on its own through the weekly release. gomodTidy runs go mod tidy after every Go update, because CI's tidy job fails on a go.mod that is not tidy",
   "extends": [
     "github>yuanying/renovate-config",
-    "github>yuanying/renovate-config:automerge-patch"
+    "github>yuanying/renovate-config:platform-automerge"
   ],
   "postUpdateOptions": [
     "gomodTidy"
