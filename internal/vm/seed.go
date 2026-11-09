@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 
 	"github.com/yuanying/vmapi/internal/config"
 )
