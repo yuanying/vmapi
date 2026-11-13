@@ -9,6 +9,9 @@ libvirt の上に置く、VM 単位の薄い HTTP API。VM の作成・一覧・
 API の契約は `api/openapi.yaml`、設計の決定は `docs/adr/`、設定ファイルは
 `docs/config.md` にある。
 
+エージェントに `vmctl` を使わせるための skill が、リポジトリ直下の `SKILL.md` にある。
+このリポジトリを skill のディレクトリ（たとえば `skills/vmapi`）に clone すれば、そのまま読み込める。
+
 ## サーバー `vmapi`
 
 ```bash
